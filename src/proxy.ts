@@ -106,9 +106,9 @@ export default withAuth(
   }
 );
 
-// Protect all routes except /login and /api/auth
+// Protect all routes except /login, /robots.txt and /api/auth
 export const config = {
   matcher: [
-    "/((?!login|api/auth|_next/static|_next/image|favicon.ico|favicon.svg|logo.svg|.*\\.svg$|.*\\.png$|.*\\.ico$).*)",
+    "/((?!login|robots\\.txt$|api/auth|_next/static|_next/image|favicon.ico|favicon.svg|logo.svg|.*\\.svg$|.*\\.png$|.*\\.ico$).*)",
   ],
 };
