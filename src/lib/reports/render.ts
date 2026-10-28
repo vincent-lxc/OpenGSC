@@ -16,6 +16,20 @@ import { DEFAULT_BRANDING } from "./branding";
 import type { ReportSectionId } from "./sections";
 import { SECTION_TITLES_EN } from "./sections";
 import type { ReportData } from "./collect";
+import { rankSuccessLabel } from "@/lib/rankFreshness";
+
+const RANK_FOUND_COPY = { at: "最后查到：{time}（UTC+8）", never: "尚未查到" };
+
+/** Present only when the report row carries `foundAt` (including null). Older snapshots omit the key. */
+function rankFoundHtml(foundAt: string | null | undefined): string {
+  if (foundAt === undefined) return "";
+  const { text, state } = rankSuccessLabel(foundAt, RANK_FOUND_COPY);
+  const warn = state !== "fresh";
+  const style = warn
+    ? "color:#B45309;background:rgba(245,158,11,0.16);border:1px solid rgba(245,158,11,0.45);"
+    : "color:#64748b;border:1px solid transparent;";
+  return `<div style="${style}display:inline-block;margin-top:4px;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700;line-height:1.35;white-space:normal;">${escapeHtml(text)}</div>`;
+}
 
 // ─── small pure helpers ───────────────────────────────────────────────────────
 
@@ -308,9 +322,9 @@ function renderPositions(data: ReportData): string {
     kpi("Top 3", fmtInt(p.top3)),
     kpi("Top 10", fmtInt(p.top10)),
   ].join("");
-  const moveTable = (title: string, moves: { keyword: string; location: string; position: number | null; change: number | null }[]) => {
+  const moveTable = (title: string, moves: { keyword: string; location: string; position: number | null; change: number | null; foundAt?: string | null }[]) => {
     if (!moves.length) return "";
-    const rows = moves.map(m => `<tr><td>${escapeHtml(m.keyword)}${m.location ? ` <span class="meta">· ${escapeHtml(m.location)}</span>` : ""}</td><td class="num">${m.position == null ? "—" : `#${m.position}`}</td><td class="num">${deltaSpan(m.change)}</td></tr>`).join("");
+    const rows = moves.map(m => `<tr><td>${escapeHtml(m.keyword)}${m.location ? ` <span class="meta">· ${escapeHtml(m.location)}</span>` : ""}${rankFoundHtml(m.foundAt)}</td><td class="num">${m.position == null ? "—" : `#${m.position}`}</td><td class="num">${deltaSpan(m.change)}</td></tr>`).join("");
     return `<h4>${escapeHtml(title)}</h4><table><thead><tr><th>Keyword</th><th class="num">Position</th><th class="num">Change</th></tr></thead><tbody>${rows}</tbody></table>`;
   };
   return `${checkedLine}<div class="kpis">${kpis}</div>${moveTable("Improved", p.improved)}${moveTable("Declined", p.declined)}`;
@@ -318,7 +332,7 @@ function renderPositions(data: ReportData): string {
 
 function renderLocal(data: ReportData): string {
   const l = data.local!;
-  const rows = l.keywords.map(k => `<tr><td>${escapeHtml(k.keyword)}</td><td>${escapeHtml(k.location)}</td><td class="num">${k.position == null ? "—" : `#${k.position}`}</td><td class="num">${k.localPack == null ? "—" : `#${k.localPack} in pack`}</td></tr>`).join("");
+  const rows = l.keywords.map(k => `<tr><td>${escapeHtml(k.keyword)}${rankFoundHtml(k.foundAt)}</td><td>${escapeHtml(k.location)}</td><td class="num">${k.position == null ? "—" : `#${k.position}`}</td><td class="num">${k.localPack == null ? "—" : `#${k.localPack} in pack`}</td></tr>`).join("");
   const table = rows
     ? `<table><thead><tr><th>Keyword</th><th>Location</th><th class="num">Organic</th><th class="num">Map pack</th></tr></thead><tbody>${rows}</tbody></table>`
     : noData("No location-tracked keywords yet");
