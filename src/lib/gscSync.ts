@@ -1,6 +1,13 @@
 import { prisma } from '@/lib/prisma';
 import { google } from 'googleapis';
-import { recordSyncCompleted } from '@/lib/syncSchedule';
+import { recordSyncFinished } from '@/lib/syncSchedule';
+import {
+  classifySyncError,
+  errorText,
+  sanitizeSyncError,
+  summarizeSyncFailure,
+  type SyncFailureKind,
+} from '@/lib/gscSyncHealth';
 
 let isSyncing = false;
 
@@ -10,8 +17,8 @@ export interface SyncResult {
   // Properties this run moved into or out of the archive because Google's site list changed.
   sitesArchived: number;
   sitesRestored: number;
-  accountErrors: { accountId: string; error: string; needsReauth: boolean }[];
-  siteErrors: { site: string; error: string }[];
+  accountErrors: { accountId: string; error: string; needsReauth: boolean; kind: SyncFailureKind }[];
+  siteErrors: { site: string; error: string; kind: SyncFailureKind }[];
 }
 
 let lastSyncResult: SyncResult = {
@@ -97,10 +104,10 @@ function cleanSiteUrl(siteUrl: string): string {
   }
 }
 
-export async function runGscSync() {
+export async function runGscSync(): Promise<SyncResult | null> {
   if (isSyncing) {
     console.log('[GSC Sync] Already in progress — skipping.');
-    return;
+    return null;
   }
   isSyncing = true;
   syncStartedAt = new Date();
@@ -138,7 +145,7 @@ export async function runGscSync() {
 
     if (accounts.length === 0) {
       console.log('[GSC Sync] No Google accounts found.');
-      return;
+      return result;
     }
 
     // GSC 'final' data lags ~2 days
@@ -200,16 +207,19 @@ export async function runGscSync() {
         const live = liveSiteIdsByUser.get(userId) ?? new Set<string>();
         for (const entry of siteList) if (entry.siteUrl) live.add(entry.siteUrl);
         liveSiteIdsByUser.set(userId, live);
-      } catch (err: any) {
-        console.error(`[GSC Sync]   Failed to list sites: ${err.message}`);
+      } catch (err: unknown) {
+        const text = errorText(err);
+        const kind = classifySyncError(text);
+        console.error(`[GSC Sync]   Failed to list sites: ${text}`);
         // Scope errors ("Request had insufficient authentication scopes.", "Insufficient
-        // Permission") never recover on retry — the token itself is valid but too narrow,
-        // so the only way out is the user reconnecting the account.
-        const needsReauth = /invalid_grant|token.*expired|unauthorized|invalid.*token|insufficient.*(permission|scope)/i.test(err.message);
+        // Permission") and a revoked refresh token (`invalid_grant`, often only on
+        // response.data while message is "Request failed with status code 400") never
+        // recover on retry. The user has to sign in again and grant the full scopes.
         result.accountErrors.push({
           accountId: account.providerAccountId,
-          error: err.message,
-          needsReauth,
+          error: sanitizeSyncError(text),
+          needsReauth: kind === 'reauth',
+          kind,
         });
         // Marks the whole user, not just this account: with an incomplete picture of what they
         // own, anything "missing" might simply be behind the token that just failed.
@@ -286,6 +296,10 @@ export async function runGscSync() {
         // then follows the recent window. A type GSC rejects is logged and skipped: it must
         // never take the web sync down with it.
         const rollupTypes = ['web', 'discover', 'news', 'image', 'video'];
+        // The web rollup is the sync that counts. URL and query breakdowns can fail
+        // without meaning the property was not refreshed. A thrown web call does not
+        // move lastGscSyncAt — including when the body is invalid_grant.
+        let webOk = false;
         for (const searchType of rollupTypes) {
           const hasRecent = (await prisma.dailyMetric.count({
             where: { siteId: dbSite.id, date: { gte: recentStart }, url: '', query: '', searchType },
@@ -313,6 +327,7 @@ export async function runGscSync() {
             const rows = res.data.rows ?? [];
             note.push(`${searchType}:${rows.length}d${needsTypeHistory ? '(full)' : ''}`);
 
+            if (searchType === 'web') webOk = true;
             if (rows.length > 0) {
               const rangeStart = new Date(typeStartStr);
 
@@ -344,12 +359,23 @@ export async function runGscSync() {
               });
               if (searchType === 'web') result.sitesSynced++;
             }
-          } catch (err: any) {
-            console.error(`[GSC Sync]     Error syncing ${hostname} (${searchType}): ${err.message}`);
+          } catch (err: unknown) {
+            const text = errorText(err);
+            const kind = classifySyncError(text);
+            console.error(`[GSC Sync]     Error syncing ${hostname} (${searchType}): ${text}`);
             if (searchType === 'web') {
-              result.siteErrors.push({ site: hostname, error: err.message });
+              result.siteErrors.push({ site: hostname, error: sanitizeSyncError(text), kind });
             }
           }
+        }
+
+        if (webOk) {
+          await prisma.site.update({
+            where: { id: dbSite.id },
+            data: { lastGscSyncAt: new Date() },
+          }).catch((err: unknown) => {
+            console.error(`[GSC Sync]   Could not store last success for ${hostname}: ${errorText(err)}`);
+          });
         }
 
         // ── Step 3: sync per-URL daily data (Content Decay Map) ─────────────
@@ -497,6 +523,14 @@ export async function runGscSync() {
     }
   } catch (e) {
     console.error('[GSC Sync] Fatal error:', e);
+    const text = errorText(e);
+    const kind = classifySyncError(text);
+    result.accountErrors.push({
+      accountId: '*',
+      error: sanitizeSyncError(text || 'Sync failed.'),
+      needsReauth: kind === 'reauth',
+      kind,
+    });
   } finally {
     result.completedAt = new Date();
     lastSyncResult = result;
@@ -508,8 +542,19 @@ export async function runGscSync() {
     syncStartedAt = null;
     console.log(`[GSC Sync] Done in ${elapsed}. sites=${result.sitesSynced} archived=${result.sitesArchived} restored=${result.sitesRestored} accountErrors=${result.accountErrors.length} siteErrors=${result.siteErrors.length}`);
 
-    // Persist the completion time. Deliberately after the log line and outside anything that can
-    // abort the run: this is a nicety for the UI, not part of the sync.
-    await recordSyncCompleted(syncedUserIds, result.completedAt).catch(() => {});
+    // Persist the outcome. A failed run must not move lastCompletedAt — that timestamp is
+    // what the button calls "last sync", and stamping a revoked token made it look fresh.
+    const summary = summarizeSyncFailure(result);
+    const failed = result.accountErrors.length > 0 || result.siteErrors.length > 0;
+    await recordSyncFinished(syncedUserIds, {
+      when: result.completedAt,
+      sitesSynced: result.sitesSynced,
+      accountErrors: result.accountErrors.length,
+      siteErrors: result.siteErrors.length,
+      needsReauth: summary.needsReauth,
+      failureKind: failed ? summary.failureKind : null,
+    }).catch(() => {});
   }
+
+  return result;
 }
