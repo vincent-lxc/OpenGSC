@@ -24,9 +24,9 @@ export function rankSuccessStamp(at: Date | string): string {
 }
 
 /**
- * The sentence the Positions UI shows. `never` is 「尚未查到」; anything else is
- * 「最后查到：MM-DD HH:mm（UTC+8）」. Templates come from the locale files so the
- * test can pin the Chinese copy without rendering React.
+ * The Positions badge uses 「最后查到」 for a known rank and 「最后检查」 for a
+ * completed not-found check. Templates come from the locale files so tests can
+ * pin the Chinese copy without rendering React.
  */
 export function rankSuccessLabel(
   at: Date | string | null | undefined,

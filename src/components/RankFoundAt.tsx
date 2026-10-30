@@ -1,23 +1,24 @@
 "use client";
 
-// 「最后查到」— when this keyword's rank was last found, not when the scheduler
-// last touched the row. Same badge as the site card's GSC sync time, except the
+// 「最后查到」 for a known rank; 「最后检查」 for a successful not-found check.
+// Both use the last successful check, not when the scheduler last touched the row.
+// Same badge as the site card's GSC sync time, except the
 // yellow line is 72h (keywords run every other day) instead of 48h.
 
 import { rankSuccessLabel } from "@/lib/rankFreshness";
 import { useLanguage } from "@/lib/i18n/LanguageProvider";
 
-export default function RankFoundAt({ at }: { at: string | null | undefined }) {
+export default function RankFoundAt({ at, notFound = false }: { at: string | null | undefined; notFound?: boolean }) {
   const { t } = useLanguage();
   const { state, text } = rankSuccessLabel(at, {
-    at: t("rankLastFoundAt"),
+    at: t(notFound ? "rankLastCheckedAt" : "rankLastFoundAt"),
     never: t("rankLastFoundNever"),
   });
   const warn = state !== "fresh";
   return (
     <span
       className="rank-found-at"
-      title={t("rankLastFoundHint")}
+      title={t(notFound ? "rankLastCheckedHint" : "rankLastFoundHint")}
       style={{
         display: "inline-block",
         boxSizing: "border-box",

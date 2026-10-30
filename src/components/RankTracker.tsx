@@ -18,6 +18,7 @@ import { COUNTRIES, LANGUAGES, defaultLanguageFor } from "@/lib/seo/regions";
 import { RANK_PROVIDER_LIST, rankProviderName } from "@/lib/seo/rankProviders";
 import KeywordWeightsBar from "@/components/KeywordWeightsBar";
 import RankFoundAt from "@/components/RankFoundAt";
+import { rankErrorKey } from "@/lib/rankError";
 import { useKeywordWeights } from "@/lib/seo/useKeywordWeights";
 
 type KwRow = {
@@ -135,7 +136,7 @@ function HistoryChart({ keywordId }: { keywordId: string }) {
       <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--color-text-primary)" }}>
         {data?.position == null ? t("rankNotFound") : `#${data.position}`}
       </span>
-      <RankFoundAt at={data?.lastSuccessfulCheckAt ?? null} />
+      <RankFoundAt at={data?.lastSuccessfulCheckAt ?? null} notFound={data?.position == null} />
     </div>
   );
 
@@ -675,13 +676,18 @@ export default function RankTracker({ siteDbId }: { siteDbId: string; domain?: s
                           </span>
                         )}
                         <span className="rank-found-under-kw">
-                          <RankFoundAt at={r.lastSuccessfulCheckAt} />
+                          <RankFoundAt at={r.lastSuccessfulCheckAt} notFound={r.position === null && r.lastSuccessfulCheckAt != null} />
                         </span>
                       </div>
                     </td>
                     <td style={{ padding: "10px 12px", whiteSpace: "nowrap", textAlign: "center" }}>
-                      {r.lastError ? (
-                        <span title={r.lastError.startsWith("location_") ? t(`lrErr_${r.lastError}` as never) : r.lastError} style={{ color: "#EF4444", fontSize: "12px" }}>error</span>
+                      {r.lastError && r.position !== null ? (
+                        <div title={t(rankErrorKey(r.lastError))}>
+                          <span style={{ fontWeight: 700, fontSize: "15px", color: r.position <= 3 ? "#10B981" : r.position <= 10 ? "#3B82F6" : "var(--color-text-primary)" }}>#{r.position}</span>
+                          <div style={{ color: "var(--color-text-secondary)", fontSize: "11px", fontWeight: 400 }}>{t("rankCheckFailedRetained")}</div>
+                        </div>
+                      ) : r.lastError ? (
+                        <span title={t(rankErrorKey(r.lastError))} style={{ color: "#EF4444", fontSize: "12px" }}>{t("rankCheckFailed")}</span>
                       ) : r.lastCheckedAt === null ? (
                         <span style={{ color: "var(--color-text-secondary)" }}>…</span>
                       ) : r.position === null ? (
@@ -705,7 +711,7 @@ export default function RankTracker({ siteDbId }: { siteDbId: string; domain?: s
                       ) : r.lastError ? (
                         // Some other failure: the pack is simply unknown this check — an em
                         // dash with the cause, never "not in pack" (that would be an answer).
-                        <span title={r.lastError} style={{ color: "var(--color-text-secondary)" }}>—</span>
+                        <span title={t(rankErrorKey(r.lastError))} style={{ color: "var(--color-text-secondary)" }}>—</span>
                       ) : r.lastCheckedAt === null ? (
                         <span style={{ color: "var(--color-text-secondary)" }}>…</span>
                       ) : r.localPack != null ? (
@@ -742,7 +748,7 @@ export default function RankTracker({ siteDbId }: { siteDbId: string; domain?: s
                     </td>
                     <td style={{ padding: "10px 12px" }}><PosSparkline history={r.history} /></td>
                     <td className="rank-found-col" style={{ padding: "10px 12px", minWidth: "11.5rem", verticalAlign: "middle" }}>
-                      <RankFoundAt at={r.lastSuccessfulCheckAt} />
+                      <RankFoundAt at={r.lastSuccessfulCheckAt} notFound={r.position === null && r.lastSuccessfulCheckAt != null} />
                     </td>
                     <td style={{ padding: "10px 12px", whiteSpace: "nowrap", textAlign: "right" }} onClick={e => e.stopPropagation()}>
                       {!guest && <><button onClick={() => checkOne(r.id)} disabled={!!busy} title={t("rankCheckAll")}

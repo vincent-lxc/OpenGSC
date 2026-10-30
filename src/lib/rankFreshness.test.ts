@@ -33,6 +33,14 @@ test("older than 72h is yellow", () => {
   assert.match(label.text, /^最后查到：\d{2}-\d{2} \d{2}:\d{2}（UTC\+8）$/);
 });
 
+test("a completed not-found check uses the last-checked label", () => {
+  const label = rankSuccessLabel(new Date("2026-10-28T01:14:00.000Z"), {
+    at: "最后检查：{time}（UTC+8）",
+    never: "尚未查到",
+  }, NOW);
+  assert.equal(label.text, "最后检查：10-28 09:14（UTC+8）");
+});
+
 test("no successful check is 尚未查到", () => {
   for (const at of [null, undefined, ""]) {
     const label = rankSuccessLabel(at, ZH, NOW);
