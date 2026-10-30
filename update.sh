@@ -81,6 +81,11 @@ fi
 echo "[update] prisma db push..."
 npx prisma db push --skip-generate || npx prisma db push || { echo "[update] prisma db push FAILED"; echo "___OPENGSC_UPDATE_FAIL___"; exit 1; }
 
+# db push does not execute migration SQL. Stop if the historical rank timestamps
+# cannot be restored; starting the UI would show old keywords as never checked.
+echo "[update] backfilling successful rank check times..."
+node scripts/backfill-last-successful-check.mjs || { echo "[update] rank timestamp backfill FAILED"; echo "___OPENGSC_UPDATE_FAIL___"; exit 1; }
+
 echo "[update] npm run build..."
 npm run build || { echo "[update] build FAILED"; echo "___OPENGSC_UPDATE_FAIL___"; exit 1; }
 
