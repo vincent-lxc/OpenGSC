@@ -684,7 +684,7 @@ export default function RankTracker({ siteDbId }: { siteDbId: string; domain?: s
                       {r.lastError && r.position !== null ? (
                         <div title={t(rankErrorKey(r.lastError))}>
                           <span style={{ fontWeight: 700, fontSize: "15px", color: r.position <= 3 ? "#10B981" : r.position <= 10 ? "#3B82F6" : "var(--color-text-primary)" }}>#{r.position}</span>
-                          <div style={{ color: "var(--color-text-secondary)", fontSize: "11px", fontWeight: 400 }}>{t("rankCheckFailedRetained")}</div>
+                          <div style={{ color: "var(--color-text-secondary)", fontSize: "11px", fontWeight: 400, whiteSpace: "normal", maxWidth: "7rem", margin: "0 auto", lineHeight: 1.3 }}>{t("rankCheckFailedRetained")}</div>
                         </div>
                       ) : r.lastError ? (
                         <span title={t(rankErrorKey(r.lastError))} style={{ color: "#EF4444", fontSize: "12px" }}>{t("rankCheckFailed")}</span>
