@@ -30,7 +30,7 @@ export async function GET(req: Request) {
   const checks = await prisma.rankCheck.findMany({
     where: { keywordId, checkedAt: { gte: since } },
     orderBy: { checkedAt: "asc" },
-    select: { checkedAt: true, position: true, url: true, error: true, localPack: true, hasLocalPack: true },
+    select: { checkedAt: true, position: true, depth: true, url: true, error: true, localPack: true, hasLocalPack: true },
   });
 
   // GSC daily series for this exact query. For a guest (share link) there's no session user,
@@ -81,6 +81,7 @@ export async function GET(req: Request) {
     country: kw.country,
     location: kw.location,
     position: kw.lastPosition,
+    lastDepth: [...checks].reverse().find((c) => !c.error)?.depth ?? null,
     bestPosition: kw.bestPosition,
     lastSuccessfulCheckAt: kw.lastSuccessfulCheckAt,
     url: kw.lastUrl,

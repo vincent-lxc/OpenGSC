@@ -21,6 +21,11 @@ import RankFoundAt from "@/components/RankFoundAt";
 import { rankErrorKey } from "@/lib/rankError";
 import { useKeywordWeights } from "@/lib/seo/useKeywordWeights";
 
+/** ">20" when the last check knows its depth, else the generic "not in top" label. */
+export function notInTop(depth: number | null | undefined, fallback: string): string {
+  return depth && depth > 0 ? `>${depth}` : fallback;
+}
+
 type KwRow = {
   id: string; keyword: string; country: string; lang: string; device: string;
   createdAt: string; lastCheckedAt: string | null;
@@ -28,6 +33,8 @@ type KwRow = {
   lastSuccessfulCheckAt?: string | null;
   position: number | null; prevPosition: number | null; bestPosition: number | null;
   url: string | null; lastError: string | null; lastProvider?: string | null;
+  /** Depth of the last check; with position null it reads ">N". */
+  lastDepth?: number | null;
   // wave-nov N3: "" = country-level keyword (as before) | city name | "lat,lng"
   location: string;
   // Our place in the map pack (1..3), SEPARATE from `position`; null = not in pack
@@ -134,7 +141,7 @@ function HistoryChart({ keywordId }: { keywordId: string }) {
   const foundRow = (
     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" }}>
       <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--color-text-primary)" }}>
-        {data?.position == null ? t("rankNotFound") : `#${data.position}`}
+        {data?.position == null ? notInTop(data?.lastDepth, t("rankNotFound")) : `#${data.position}`}
       </span>
       <RankFoundAt at={data?.lastSuccessfulCheckAt ?? null} notFound={data?.position == null} />
     </div>
@@ -691,7 +698,7 @@ export default function RankTracker({ siteDbId }: { siteDbId: string; domain?: s
                       ) : r.lastCheckedAt === null ? (
                         <span style={{ color: "var(--color-text-secondary)" }}>…</span>
                       ) : r.position === null ? (
-                        <span style={{ color: "var(--color-text-secondary)", fontSize: "11px", padding: "2px 8px", borderRadius: "20px", background: "rgba(128,128,128,0.08)" }}>{t("rankNotFound")}</span>
+                        <span style={{ color: "var(--color-text-secondary)", fontSize: "11px", padding: "2px 8px", borderRadius: "20px", background: "rgba(128,128,128,0.08)" }} title={t("rankNotFound")}>{notInTop(r.lastDepth, t("rankNotFound"))}</span>
                       ) : (
                         <>
                           <span title={r.lastProvider ? `${t("rankCheckedVia")} ${r.lastProvider === "aparser" ? "A-Parser" : r.lastProvider}` : undefined} style={{ fontWeight: 700, fontSize: "15px", color: r.position <= 3 ? "#10B981" : r.position <= 10 ? "#3B82F6" : "var(--color-text-primary)" }}>{r.position}</span>

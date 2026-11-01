@@ -147,3 +147,49 @@ test("a thin SERP does not clear a known rank", async () => {
     assert.match(String(checks.at(-1)?.error), /untrusted_not_found/);
   } finally { restore(); }
 });
+
+test("serper budget cap: no call, no RankCheck, no keyword write", async () => {
+  const { SerperBudget } = await import("./serperBudget");
+  let calls = 0;
+  const restore = useFetch(() => { calls++; return { status: 200, json: { organic: organic(10, 1) } }; });
+  const c0 = checks.length, u0 = updates.length;
+  try {
+    const res = await checkTrackedKeyword(kw(3), { provider: "serper", apiKey: "k" } as never, { serperBudget: new SerperBudget(20, 19) });
+    assert.equal(res.error, "serper_budget_cap");
+    assert.equal(calls, 0);
+    assert.equal(checks.length, c0);
+    assert.equal(updates.length, u0);
+  } finally { restore(); }
+});
+
+test("SERPER_RANK_MAX_DEPTH=20: a healthy miss costs 2 calls and is stored as >20", async () => {
+  const { SerperBudget } = await import("./serperBudget");
+  process.env.SERPER_RANK_MAX_DEPTH = "20";
+  let calls = 0;
+  const restore = useFetch((b) => { calls++; return { status: 200, json: { organic: organic(10, Number(b.page)) } }; });
+  try {
+    const budget = new SerperBudget(20, 0);
+    const res = await checkTrackedKeyword(kw(3), { provider: "serper", apiKey: "k" } as never, { serperBudget: budget });
+    assert.equal(calls, 2);
+    assert.equal(budget.used, 2);
+    assert.equal(res.error, undefined);
+    assert.equal(checks.at(-1)?.position, null);
+    assert.equal(checks.at(-1)?.depth, 20);
+    assert.equal(checks.at(-1)?.error, null);
+    const u = lastUpdate();
+    assert.equal(u.lastPosition, null);
+    assert.equal(u.prevPosition, 3);
+    assert.ok(u.lastSuccessfulCheckAt instanceof Date);
+  } finally { restore(); delete process.env.SERPER_RANK_MAX_DEPTH; }
+});
+
+test("SERPER_RANK_MAX_DEPTH=20: an empty SERP still keeps the known rank", async () => {
+  process.env.SERPER_RANK_MAX_DEPTH = "20";
+  const restore = useFetch(() => ({ status: 200, json: { organic: [] } }));
+  try {
+    const res = await checkTrackedKeyword(kw(3), { provider: "serper", apiKey: "k" } as never);
+    assert.ok(res.error);
+    assert.equal(lastUpdate().lastPosition, undefined);
+    assert.equal(lastUpdate().lastSuccessfulCheckAt, undefined);
+  } finally { restore(); delete process.env.SERPER_RANK_MAX_DEPTH; }
+});
