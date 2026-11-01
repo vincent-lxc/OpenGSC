@@ -162,7 +162,7 @@ test("serper budget cap: no call, no RankCheck, no keyword write", async () => {
   } finally { restore(); }
 });
 
-test("SERPER_RANK_MAX_DEPTH=20: a miss costs 2 calls and keeps the known rank", async () => {
+test("SERPER_RANK_MAX_DEPTH=20: a healthy miss costs 2 calls and is stored as >20", async () => {
   const { SerperBudget } = await import("./serperBudget");
   process.env.SERPER_RANK_MAX_DEPTH = "20";
   let calls = 0;
@@ -172,7 +172,24 @@ test("SERPER_RANK_MAX_DEPTH=20: a miss costs 2 calls and keeps the known rank", 
     const res = await checkTrackedKeyword(kw(3), { provider: "serper", apiKey: "k" } as never, { serperBudget: budget });
     assert.equal(calls, 2);
     assert.equal(budget.used, 2);
-    assert.equal(res.error, "untrusted_not_found");
+    assert.equal(res.error, undefined);
+    assert.equal(checks.at(-1)?.position, null);
+    assert.equal(checks.at(-1)?.depth, 20);
+    assert.equal(checks.at(-1)?.error, null);
+    const u = lastUpdate();
+    assert.equal(u.lastPosition, null);
+    assert.equal(u.prevPosition, 3);
+    assert.ok(u.lastSuccessfulCheckAt instanceof Date);
+  } finally { restore(); delete process.env.SERPER_RANK_MAX_DEPTH; }
+});
+
+test("SERPER_RANK_MAX_DEPTH=20: an empty SERP still keeps the known rank", async () => {
+  process.env.SERPER_RANK_MAX_DEPTH = "20";
+  const restore = useFetch(() => ({ status: 200, json: { organic: [] } }));
+  try {
+    const res = await checkTrackedKeyword(kw(3), { provider: "serper", apiKey: "k" } as never);
+    assert.ok(res.error);
     assert.equal(lastUpdate().lastPosition, undefined);
+    assert.equal(lastUpdate().lastSuccessfulCheckAt, undefined);
   } finally { restore(); delete process.env.SERPER_RANK_MAX_DEPTH; }
 });

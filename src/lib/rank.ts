@@ -262,7 +262,9 @@ async function providerScan(
       ...res,
       missTrusted: serpMissIsTrusted({
         depth: res.depth,
-        maxDepth: providerMax, // a capped-depth miss is not proof of "not ranking"
+        // A healthy, complete scan to the (possibly env-capped) depth is a real ">depth" miss:
+        // stored as null with RankCheck.depth, so the UI shows ">20" and drops are not hidden.
+        maxDepth: max,
         resultCount: res.resultCount ?? 0,
         complete: res.complete !== false,
       }),

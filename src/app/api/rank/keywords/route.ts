@@ -51,7 +51,7 @@ export async function GET(req: Request) {
       checks: {
         orderBy: { checkedAt: "desc" },
         take: 30,
-        select: { checkedAt: true, position: true, error: true, provider: true, localPack: true, hasLocalPack: true },
+        select: { checkedAt: true, position: true, depth: true, error: true, provider: true, localPack: true, hasLocalPack: true },
       },
     },
   });
@@ -100,6 +100,8 @@ export async function GET(req: Request) {
       url: k.lastUrl,
       lastError: k.checks[0]?.error ?? null,
       lastProvider: k.checks[0]?.provider ?? null,
+      // Depth of the last check: a null position at depth N reads ">N" (not in the top N).
+      lastDepth: k.checks[0]?.depth ?? null,
       // Map pack, kept OUTSIDE `position` (wave-nov §0.2): our place 1..3 or null = not in pack.
       localPack: k.lastLocalPack,
       // What the last check said about the pack itself: true = pack existed, we are not in it;
