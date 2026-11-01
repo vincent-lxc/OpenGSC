@@ -147,3 +147,32 @@ test("a thin SERP does not clear a known rank", async () => {
     assert.match(String(checks.at(-1)?.error), /untrusted_not_found/);
   } finally { restore(); }
 });
+
+test("serper budget cap: no call, no RankCheck, no keyword write", async () => {
+  const { SerperBudget } = await import("./serperBudget");
+  let calls = 0;
+  const restore = useFetch(() => { calls++; return { status: 200, json: { organic: organic(10, 1) } }; });
+  const c0 = checks.length, u0 = updates.length;
+  try {
+    const res = await checkTrackedKeyword(kw(3), { provider: "serper", apiKey: "k" } as never, { serperBudget: new SerperBudget(20, 19) });
+    assert.equal(res.error, "serper_budget_cap");
+    assert.equal(calls, 0);
+    assert.equal(checks.length, c0);
+    assert.equal(updates.length, u0);
+  } finally { restore(); }
+});
+
+test("SERPER_RANK_MAX_DEPTH=20: a miss costs 2 calls and keeps the known rank", async () => {
+  const { SerperBudget } = await import("./serperBudget");
+  process.env.SERPER_RANK_MAX_DEPTH = "20";
+  let calls = 0;
+  const restore = useFetch((b) => { calls++; return { status: 200, json: { organic: organic(10, Number(b.page)) } }; });
+  try {
+    const budget = new SerperBudget(20, 0);
+    const res = await checkTrackedKeyword(kw(3), { provider: "serper", apiKey: "k" } as never, { serperBudget: budget });
+    assert.equal(calls, 2);
+    assert.equal(budget.used, 2);
+    assert.equal(res.error, "untrusted_not_found");
+    assert.equal(lastUpdate().lastPosition, undefined);
+  } finally { restore(); delete process.env.SERPER_RANK_MAX_DEPTH; }
+});

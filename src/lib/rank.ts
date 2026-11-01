@@ -23,6 +23,7 @@ import { checkWithFallback, fallbackForLocation, serpMissIsTrusted, untrustedRan
 import { resolveAparserPassword } from "@/lib/seo/aparserServerCreds";
 import { brandNamesFromHost, matchLocalPack, type LocalPackEntry } from "@/lib/seo/localPack";
 import { rawQuery } from "@/lib/db/raw";
+import { SERPER_BUDGET_ERROR, SerperBudget, serperCallCap, serperCapDeferMs, serperPages, serperRankMaxDepth, serperWorstCasePages } from "@/lib/serperBudget";
 
 export const RANK_STALE_MS = 20 * 60 * 60 * 1000; // ~daily, resilient to restarts
 
@@ -190,7 +191,11 @@ export interface CheckResult {
 // One SERP scan pass at the given depth.
 async function scan(
   creds: SerpCreds, keyword: string, gl: string, hl: string, depth: number, siteHost: string, location = "",
+  budget?: SerperBudget | null,
 ): Promise<CheckResult> {
+  if (creds.provider === "serper" && budget && !budget.take(serperPages(depth))) {
+    return { position: null, url: null, depth, error: SERPER_BUDGET_ERROR, resultCount: 0, complete: false };
+  }
   const serp = await runSerp(creds.provider, creds.apiKey, keyword, {
     gl, hl, num: depth, baseUrl: creds.baseUrl, ...(creds.configPreset ? { configPreset: creds.configPreset } : {}),
     ...(location ? { location } : {}),
@@ -225,8 +230,10 @@ async function providerScan(
   creds: SerpCreds,
   kw: { keyword: string; country: string; lang: string; location?: string; lastPosition: number | null },
   siteHost: string,
+  budget?: SerperBudget | null,
 ): Promise<CheckResult> {
-  const max = MAX_DEPTH[creds.provider] ?? 50;
+  const providerMax = MAX_DEPTH[creds.provider] ?? 50;
+  const max = creds.provider === "serper" ? serperRankMaxDepth(providerMax) : providerMax;
   const location = kw.location ?? "";
   if (creds.provider === "aparser" && !location) {
     const r = await aparserRankPosition(
@@ -245,17 +252,17 @@ async function providerScan(
   const depth = kw.lastPosition
     ? Math.min(max, Math.ceil((kw.lastPosition + SMART_BUFFER) / 10) * 10)
     : max;
-  let res = await scan(creds, kw.keyword, kw.country, kw.lang, depth, siteHost, location);
+  let res = await scan(creds, kw.keyword, kw.country, kw.lang, depth, siteHost, location, budget);
   // Not found in the smart window → escalate once to max depth.
   if (!res.error && res.position === null && depth < max) {
-    res = await scan(creds, kw.keyword, kw.country, kw.lang, max, siteHost, location);
+    res = await scan(creds, kw.keyword, kw.country, kw.lang, max, siteHost, location, budget);
   }
   if (!res.error && res.position === null) {
     res = {
       ...res,
       missTrusted: serpMissIsTrusted({
         depth: res.depth,
-        maxDepth: max,
+        maxDepth: providerMax, // a capped-depth miss is not proof of "not ranking"
         resultCount: res.resultCount ?? 0,
         complete: res.complete !== false,
       }),
@@ -285,6 +292,7 @@ export async function checkTrackedKeyword(
     localNames?: string[];
   },
   creds: SerpCreds,
+  opts: { serperBudget?: SerperBudget | null } = {},
 ): Promise<CheckResult> {
   const siteHost = hostOf(kw.siteUrl);
   const location = kw.location ?? "";
@@ -296,9 +304,13 @@ export async function checkTrackedKeyword(
   const run = (provider: string): Promise<RankAttempt> => {
     const c = provider === creds.provider ? creds : creds.fallback;
     if (!c) return Promise.resolve({ position: null, url: null, depth: 0, error: `no_serp_key (${provider})`, provider });
-    return providerScan(c, kw, siteHost).then((r) => ({ ...r, provider }));
+    return providerScan(c, kw, siteHost, opts.serperBudget).then((r) => ({ ...r, provider }));
   };
   const outcome = await checkWithFallback(run, creds.provider, fallbackId);
+  // Budget stop: write nothing. No RankCheck row, lastPosition / lastSuccessfulCheckAt untouched.
+  if (outcome.error && outcome.error.includes(SERPER_BUDGET_ERROR)) {
+    return { position: null, url: null, depth: outcome.depth, error: SERPER_BUDGET_ERROR, provider: outcome.provider };
+  }
   if (outcome.primaryError) {
     console.warn(`[rank] "${kw.keyword}": ${creds.provider} failed (${outcome.primaryError.slice(0, 160)}); answered by ${outcome.provider}`);
   }
@@ -408,12 +420,26 @@ async function localProfileNames(siteId: string): Promise<string[]> {
   }
 }
 
+/** Rolling-window Serper budget seeded from ProviderCall (null = no cap configured). */
+async function loadSerperBudget(): Promise<SerperBudget | null> {
+  const cap = serperCallCap();
+  if (cap == null) return null;
+  let used = 0;
+  try {
+    used = await prisma.providerCall.count({ where: { provider: "serper", at: { gte: new Date(Date.now() - RANK_STALE_MS) } } });
+  } catch (e) {
+    console.warn("[serper-budget] could not count recent calls; refusing to spend", e);
+    used = cap;
+  }
+  return new SerperBudget(cap, used);
+}
+
 // Check up to `limit` keywords of a site that are stale (or all when force=true).
 // Sequential with a small delay — kind to provider rate limits.
 export async function checkSiteKeywords(
   siteId: string, siteUrl: string, creds: SerpCreds,
   opts: { force?: boolean; limit?: number; onlyIds?: string[]; before?: Date } = {},
-): Promise<{ checked: number; remaining: number; errors: number; packChanges: PackChange[] }> {
+): Promise<{ checked: number; remaining: number; errors: number; packChanges: PackChange[]; budgetCapped?: boolean }> {
   const limit = opts.limit ?? 20;
   const staleBefore = new Date(Date.now() - RANK_STALE_MS);
   const where: any = { siteId };
@@ -432,6 +458,10 @@ export async function checkSiteKeywords(
   const localNames = await localProfileNames(siteId);
   let errors = 0;
   const packChanges: PackChange[] = [];
+  const usesSerper = creds.provider === "serper" || creds.fallback?.provider === "serper";
+  const serperBudget = usesSerper ? await loadSerperBudget() : null;
+  let capped = false;
+  let checked = 0;
   const one = async (kw: (typeof batch)[number]) => {
     const res = await checkTrackedKeyword(
       {
@@ -439,7 +469,10 @@ export async function checkSiteKeywords(
         lastPosition: kw.lastPosition, bestPosition: kw.bestPosition, siteUrl, localNames,
       },
       creds,
+      { serperBudget },
     );
+    if (res.error === SERPER_BUDGET_ERROR) { capped = true; return; }
+    checked++;
     if (res.error) errors++;
     // A pack change is a move between two CHECKS — the first check of a keyword is its
     // baseline, not a change, so a freshly added local keyword never announces itself. Only
@@ -459,10 +492,28 @@ export async function checkSiteKeywords(
     const worker = async () => { while (next < batch.length) await one(batch[next++]); };
     await Promise.all(Array.from({ length: Math.min(APARSER_RANK_WORKERS, batch.length) }, worker));
   } else {
+    const max = creds.provider === "serper" ? serperRankMaxDepth(MAX_DEPTH.serper) : 0;
+    const skipped: string[] = [];
     for (const kw of batch) {
+      if (capped || (serperBudget && creds.provider === "serper" && !serperBudget.canSpend(serperWorstCasePages(kw.lastPosition, max, SMART_BUFFER)))) {
+        capped = true;
+        skipped.push(kw.id);
+        continue;
+      }
       await one(kw);
+      if (capped) skipped.push(kw.id); // stopped inside this keyword: nothing was written for it
       await new Promise(r => setTimeout(r, 800));
     }
+    if (capped && serperBudget) {
+      const deferMs = serperCapDeferMs();
+      if (deferMs > 0 && skipped.length) {
+        // Not a check: no RankCheck, lastPosition untouched. Only moves the next attempt to the
+        // next round so the hourly tick does not backfill them.
+        await prisma.trackedKeyword.updateMany({ where: { id: { in: skipped } }, data: { lastCheckedAt: new Date(Date.now() + deferMs) } });
+      }
+      console.warn(`[serper-budget] cap reached: ${serperBudget.used}/${serperBudget.cap} Serper calls in the last ${Math.round(RANK_STALE_MS / 3600000)}h; site ${siteUrl}: checked ${checked}, skipped ${skipped.length} (unchanged${deferMs > 0 ? `, next try in ${Math.round(deferMs / 3600000)}h` : ""})`);
+    }
+    return { checked, remaining: Math.max(0, all.length - checked), errors, packChanges, budgetCapped: capped };
   }
   return { checked: batch.length, remaining: Math.max(0, all.length - batch.length), errors, packChanges };
 }
