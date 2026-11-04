@@ -17,6 +17,8 @@ const nextConfig: NextConfig = {
           // Share tokens travel in the query string. A linked asset must not echo that URL.
           { key: "Referrer-Policy", value: "no-referrer" },
           { key: "X-Content-Type-Options", value: "nosniff" },
+          // Private self-hosted instance: keep every page out of search engines.
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
         ],
       },
       {
